@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
-from fla.ops.utils.op import exp2
+# from fla.ops.utils.op import tl.math.exp2
 from fla.utils import IS_TF32_SUPPORTED, autotune_cache_kwargs, check_shared_mem
 
 
@@ -14,16 +14,16 @@ from fla.utils import IS_TF32_SUPPORTED, autotune_cache_kwargs, check_shared_mem
     'STORE_KG': lambda args: args['kg'] is not None,
     'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
 })
-@triton.autotune(
-    configs=[
-        triton.Config({'DOT_PRECISION': DOT_PRECISION}, num_warps=num_warps, num_stages=num_stages)
-        for num_warps in [2, 4, 8]
-        for num_stages in [2, 3, 4]
-        for DOT_PRECISION in (["tf32", "tf32x3", "ieee"] if IS_TF32_SUPPORTED else ["ieee"])
-    ],
-    key=['H', 'K', 'V', 'BT', 'BK', 'BV', 'IS_VARLEN'],
-    **autotune_cache_kwargs,
-)
+# @triton.autotune(
+#     configs=[
+#         triton.Config({'DOT_PRECISION': DOT_PRECISION}, num_warps=num_warps, num_stages=num_stages)
+#         for num_warps in [2, 4, 8]
+#         for num_stages in [2, 3, 4]
+#         for DOT_PRECISION in (["tf32", "tf32x3", "ieee"] if IS_TF32_SUPPORTED else ["ieee"])
+#     ],
+#     key=['H', 'K', 'V', 'BT', 'BK', 'BV', 'IS_VARLEN'],
+#     **autotune_cache_kwargs,
+# )
 @triton.jit(do_not_specialize=['T'])
 def recompute_w_u_fwd_kda_kernel(
     q,
@@ -80,19 +80,19 @@ def recompute_w_u_fwd_kda_kernel(
 
         p_gk = tl.make_block_ptr(gk + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
         b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(tl.float32)
-        b_kb *= exp2(b_gk)
+        b_kb *= tl.math.exp2(b_gk)
         if STORE_QG:
             p_q = tl.make_block_ptr(q + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
             p_qg = tl.make_block_ptr(qg + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
             b_q = tl.load(p_q, boundary_check=(0, 1))
-            b_qg = b_q * exp2(b_gk)
+            b_qg = b_q * tl.math.exp2(b_gk)
             tl.store(p_qg, b_qg.to(p_qg.dtype.element_ty), boundary_check=(0, 1))
         if STORE_KG:
             last_idx = min(i_t * BT + BT, T) - 1
             o_k = i_k * BK + tl.arange(0, BK)
             m_k = o_k < K
             b_gn = tl.load(gk + ((bos + last_idx) * H + i_h) * K + o_k, mask=m_k, other=0.).to(tl.float32)
-            b_kg = b_k * tl.where((i_t * BT + tl.arange(0, BT) < T)[:, None], exp2(b_gn[None, :] - b_gk), 0)
+            b_kg = b_k * tl.where((i_t * BT + tl.arange(0, BT) < T)[:, None], tl.math.exp2(b_gn[None, :] - b_gk), 0)
             p_kg = tl.make_block_ptr(kg + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
             tl.store(p_kg, b_kg.to(p_kg.dtype.element_ty), boundary_check=(0, 1))
 
@@ -103,15 +103,15 @@ def recompute_w_u_fwd_kda_kernel(
 @triton.heuristics({
     'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
 })
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
-        for num_warps in [2, 4]
-        for num_stages in [2, 3, 4]
-    ],
-    key=['H', 'K', 'V', 'BT', 'BK', 'BV', 'IS_VARLEN'],
-    **autotune_cache_kwargs,
-)
+# @triton.autotune(
+#     configs=[
+#         triton.Config({}, num_warps=num_warps, num_stages=num_stages)
+#         for num_warps in [2, 4]
+#         for num_stages in [2, 3, 4]
+#     ],
+#     key=['H', 'K', 'V', 'BT', 'BK', 'BV', 'IS_VARLEN'],
+#     **autotune_cache_kwargs,
+# )
 @triton.jit(do_not_specialize=['T'])
 def prepare_wy_repr_bwd_kda_kernel(
     k,
@@ -168,7 +168,7 @@ def prepare_wy_repr_bwd_kda_kernel(
         # [BT, BK]
         b_k = tl.load(p_k, boundary_check=(0, 1))
         p_gk = tl.make_block_ptr(gk + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        b_gk_exp = exp2(tl.load(p_gk, boundary_check=(0, 1)))
+        b_gk_exp = tl.math.exp2(tl.load(p_gk, boundary_check=(0, 1)))
         b_kbg = b_k * b_b[:, None] * b_gk_exp
         b_dw = tl.load(p_dw, boundary_check=(0, 1))
 
@@ -252,6 +252,8 @@ def recompute_w_u_fwd(
         BT=BT,
         BK=BK,
         BV=BV,
+        DOT_PRECISION='ieee',
+        num_warps=1
     )
     return w, u, qg, kg
 
@@ -307,6 +309,7 @@ def prepare_wy_repr_bwd(
         BT=BT,
         BK=BK,
         BV=BV,
+        num_warps=1
     )
     dk = dk2
     dg = dg2

@@ -7,7 +7,7 @@ import triton.language as tl
 from fla.ops.kda.chunk_intra_token_parallel import chunk_kda_fwd_intra_token_parallel
 from fla.ops.kda.wy_fast import recompute_w_u_fwd
 from fla.ops.utils import prepare_chunk_indices
-from fla.ops.utils.op import exp2, gather
+from fla.ops.utils.op import gather
 from fla.utils import IS_GATHER_SUPPORTED, IS_TF32_SUPPORTED, autotune_cache_kwargs
 
 if IS_TF32_SUPPORTED:
@@ -23,15 +23,15 @@ else:
 @triton.heuristics({
     'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
 })
-@triton.autotune(
-    configs=[
-        triton.Config({'BK': BK}, num_warps=num_warps)
-        for BK in [32, 64]
-        for num_warps in [1, 2, 4]
-    ],
-    key=["H", "K", "BC"],
-    **autotune_cache_kwargs,
-)
+# @triton.autotune(
+#     configs=[
+#         triton.Config({'BK': BK}, num_warps=num_warps)
+#         for BK in [32, 64]
+#         for num_warps in [1, 2, 4]
+#     ],
+#     key=["H", "K", "BC"],
+#     **autotune_cache_kwargs,
+# )
 @triton.jit(do_not_specialize=['T'])
 def chunk_kda_fwd_kernel_inter_solve_fused(
     q,
@@ -133,9 +133,9 @@ def chunk_kda_fwd_kernel_inter_solve_fused(
             # [BK]
             b_gn1 = tl.load(g + i_tc1 * H*K + o_k, mask=m_k, other=0).to(tl.float32)
             # [BC, BK]
-            b_gqn = tl.where(m_tc1[:, None], exp2(b_g1 - b_gn1[None, :]), 0)
+            b_gqn = tl.where(m_tc1[:, None], tl.math.exp2(b_g1 - b_gn1[None, :]), 0)
             # [BK, BC]
-            b_kgt = tl.trans(b_k0 * exp2(b_gn1[None, :] - b_g0))
+            b_kgt = tl.trans(b_k0 * tl.math.exp2(b_gn1[None, :] - b_g0))
             # [BC, BC]
             b_Aqk10 += tl.dot(b_q1 * b_gqn, b_kgt)
             b_Akk10 += tl.dot(b_k1 * b_gqn, b_kgt)
@@ -151,15 +151,15 @@ def chunk_kda_fwd_kernel_inter_solve_fused(
                 # [BK]
                 b_gn2 = tl.load(g + i_tc2 * H*K + o_k, mask=m_k, other=0).to(tl.float32)
                 # [BC, BK]
-                b_gqn2 = tl.where(m_tc2[:, None], exp2(b_g2 - b_gn2[None, :]), 0)
+                b_gqn2 = tl.where(m_tc2[:, None], tl.math.exp2(b_g2 - b_gn2[None, :]), 0)
                 b_qg2 = b_q2 * b_gqn2
                 b_kg2 = b_k2 * b_gqn2
                 # [BK, BC]
-                b_kgt = tl.trans(b_k0 * exp2(b_gn2[None, :] - b_g0))
+                b_kgt = tl.trans(b_k0 * tl.math.exp2(b_gn2[None, :] - b_g0))
                 b_Aqk20 += tl.dot(b_qg2, b_kgt)
                 b_Akk20 += tl.dot(b_kg2, b_kgt)
                 # [BC, BC]
-                b_kgt = tl.trans(b_k1 * exp2(b_gn2[None, :] - b_g1))
+                b_kgt = tl.trans(b_k1 * tl.math.exp2(b_gn2[None, :] - b_g1))
                 # [BC, BC]
                 b_Aqk21 += tl.dot(b_qg2, b_kgt)
                 b_Akk21 += tl.dot(b_kg2, b_kgt)
@@ -175,21 +175,21 @@ def chunk_kda_fwd_kernel_inter_solve_fused(
                     # [BK]
                     b_gn3 = tl.load(g + i_tc3 * H*K + o_k, mask=m_k, other=0).to(tl.float32)
                     # [BC, BK]
-                    b_gqn3 = tl.where(m_tc3[:, None], exp2(b_g3 - b_gn3[None, :]), 0)
+                    b_gqn3 = tl.where(m_tc3[:, None], tl.math.exp2(b_g3 - b_gn3[None, :]), 0)
                     b_qg3 = b_q3 * b_gqn3
                     b_kg3 = b_k3 * b_gqn3
                     # [BK, BC]
-                    b_kgt = tl.trans(b_k0 * exp2(b_gn3[None, :] - b_g0))
+                    b_kgt = tl.trans(b_k0 * tl.math.exp2(b_gn3[None, :] - b_g0))
                     # [BC, BC]
                     b_Aqk30 += tl.dot(b_qg3, b_kgt)
                     b_Akk30 += tl.dot(b_kg3, b_kgt)
                     # [BK, BC]
-                    b_kgt = tl.trans(b_k1 * exp2(b_gn3[None, :] - b_g1))
+                    b_kgt = tl.trans(b_k1 * tl.math.exp2(b_gn3[None, :] - b_g1))
                     # [BC, BC]
                     b_Aqk31 += tl.dot(b_qg3, b_kgt)
                     b_Akk31 += tl.dot(b_kg3, b_kgt)
                     # [BK, BC]
-                    b_kgt = tl.trans(b_k2 * exp2(b_gn3[None, :] - b_g2))
+                    b_kgt = tl.trans(b_k2 * tl.math.exp2(b_gn3[None, :] - b_g2))
                     # [BC, BC]
                     b_Aqk32 += tl.dot(b_qg3, b_kgt)
                     b_Akk32 += tl.dot(b_kg3, b_kgt)
@@ -347,15 +347,15 @@ def chunk_kda_fwd_kernel_inter_solve_fused(
 @triton.heuristics({
     'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
 })
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
-        for num_warps in [1, 2, 4, 8]
-        for num_stages in [2, 3, 4]
-    ],
-    key=['BK', 'NC', 'BT'],
-    **autotune_cache_kwargs,
-)
+# @triton.autotune(
+#     configs=[
+#         triton.Config({}, num_warps=num_warps, num_stages=num_stages)
+#         for num_warps in [1, 2, 4, 8]
+#         for num_stages in [2, 3, 4]
+#     ],
+#     key=['BK', 'NC', 'BT'],
+#     **autotune_cache_kwargs,
+# )
 @triton.jit(do_not_specialize=['B', 'T'])
 def chunk_kda_bwd_kernel_intra(
     q,
@@ -439,14 +439,14 @@ def chunk_kda_bwd_kernel_intra(
             # [BC, BK]
             b_k = tl.load(p_k, boundary_check=(0, 1))
             b_gk = tl.load(p_gk, boundary_check=(0, 1))
-            b_kg = b_k * exp2(b_gn - b_gk)
+            b_kg = b_k * tl.math.exp2(b_gn - b_gk)
             # [BC, BC]
             b_dAqk = tl.load(p_dAqk, boundary_check=(0, 1))
             b_dAkk = tl.load(p_dAkk, boundary_check=(0, 1))
             # [BC, BK]
             b_dq2 += tl.dot(b_dAqk, b_kg)
             b_dk2 += tl.dot(b_dAkk, b_kg)
-        b_gqn = exp2(b_g - b_gn)
+        b_gqn = tl.math.exp2(b_g - b_gn)
         b_dq2 *= b_gqn
         b_dk2 *= b_gqn
 
@@ -479,8 +479,8 @@ def chunk_kda_bwd_kernel_intra(
         b_dAqk_diag_qk = tl.where(m_i_diag_qk, b_dAqk_diag_qk, 0.)
         b_dAkk_diag_qk = tl.where(m_i_diag_qk, b_dAkk_diag_qk, 0.)
         b_g_diag_qk = tl.where(m_j_diag_qk, b_g - b_gn, 0.)
-        exp_b_g_diag_qk = tl.where(m_j_diag_qk, exp2(b_g_diag_qk), 0.)
-        exp_neg_b_g_diag_qk = tl.where(m_j_diag_qk, exp2(-b_g_diag_qk), 0.)
+        exp_b_g_diag_qk = tl.where(m_j_diag_qk, tl.math.exp2(b_g_diag_qk), 0.)
+        exp_neg_b_g_diag_qk = tl.where(m_j_diag_qk, tl.math.exp2(-b_g_diag_qk), 0.)
 
         b_k_exp_diag_qk = b_k * exp_neg_b_g_diag_qk
         b_dq2 += tl.dot(b_dAqk_diag_qk, b_k_exp_diag_qk) * exp_b_g_diag_qk
@@ -496,7 +496,7 @@ def chunk_kda_bwd_kernel_intra(
             # [BC, BK]
             m_i = o_i[:, None] >= j
             # [BC, BK]
-            b_gqk = exp2(b_g - b_gkj[None, :])
+            b_gqk = tl.math.exp2(b_g - b_gkj[None, :])
             b_dq2 += tl.where(m_i, b_dAqk[:, None] * b_kj[None, :] * b_gqk, 0.)
             b_dk2 += tl.where(m_i, b_dAkk[:, None] * b_kj[None, :] * b_gqk, 0.)
 
@@ -543,14 +543,14 @@ def chunk_kda_bwd_kernel_intra(
             o_j = i_t * BT + i_j * BC + o_i
             m_j = o_j < T
             # [BC, BK]
-            b_gkn = exp2(b_gk - b_gn)
+            b_gkn = tl.math.exp2(b_gk - b_gn)
             b_qg = b_q * tl.where(m_j[:, None], b_gkn, 0)
             b_kbg = b_kb * tl.where(m_j[:, None], b_gkn, 0)
             # [BC, BK]
             # (SY 09/17) important to not use bf16 here to have a good precision.
             b_dkt += tl.dot(b_dAqk, b_qg)
             b_dkt += tl.dot(b_dAkk, b_kbg)
-        b_dkt *= exp2(b_gn - b_g)
+        b_dkt *= tl.math.exp2(b_gn - b_g)
     o_dA = i_ti * H*BT + i_i * BC + o_i
     p_qj = q + i_ti * H*K + o_k
     p_kj = k + i_ti * H*K + o_k
@@ -580,8 +580,8 @@ def chunk_kda_bwd_kernel_intra(
         b_dAkk_diag_kk = tl.where(m_i_diag_kk, b_dAkk_diag_kk, 0.)
         # ensure numerical stability
         b_g_diag_kk = tl.where(m_j_diag_kk, b_g - b_gn, 0.)
-        exp_b_g_diag_kk = tl.where(m_j_diag_kk, exp2(b_g_diag_kk), 0.)
-        exp_neg_b_g_diag_kk = tl.where(m_j_diag_kk, exp2(-b_g_diag_kk), 0.)
+        exp_b_g_diag_kk = tl.where(m_j_diag_kk, tl.math.exp2(b_g_diag_kk), 0.)
+        exp_neg_b_g_diag_kk = tl.where(m_j_diag_kk, tl.math.exp2(-b_g_diag_kk), 0.)
 
         b_q_exp = b_q * exp_b_g_diag_kk
         b_kb_exp = b_k * b_b[:, None] * exp_b_g_diag_kk
@@ -599,7 +599,7 @@ def chunk_kda_bwd_kernel_intra(
             b_gkj = tl.load(p_gkj, mask=m_k, other=0).to(tl.float32)
             # [BC, BK]
             m_i = o_i[:, None] <= j
-            b_gkq = exp2(b_gkj[None, :] - b_g)
+            b_gkq = tl.math.exp2(b_gkj[None, :] - b_g)
             b_dkt += tl.where(m_i, b_dAqk[:, None] * b_qj[None, :] * b_gkq, 0.)
             b_dkt += tl.where(m_i, b_dAkk[:, None] * b_kbj[None, :] * b_gkq, 0.)
 
@@ -623,15 +623,15 @@ def chunk_kda_bwd_kernel_intra(
 @triton.heuristics({
     'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
 })
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
-        for num_warps in [1, 2, 4, 8]
-        for num_stages in [2, 3, 4]
-    ],
-    key=["BT", "BC"],
-    **autotune_cache_kwargs,
-)
+# @triton.autotune(
+#     configs=[
+#         triton.Config({}, num_warps=num_warps, num_stages=num_stages)
+#         for num_warps in [1, 2, 4, 8]
+#         for num_stages in [2, 3, 4]
+#     ],
+#     key=["BT", "BC"],
+#     **autotune_cache_kwargs,
+# )
 @triton.jit(do_not_specialize=['T'])
 def chunk_kda_fwd_kernel_intra_sub_chunk(
     q,
@@ -696,11 +696,11 @@ def chunk_kda_fwd_kernel_intra_sub_chunk(
         b_gn = b_gn[None, :]
 
     # current block, keep numerical stability by subtracting the left boundary
-    # less than 85 to avoid overflow in exp2
+    # less than 85 to avoid overflow in tl.math.exp2
     b_gm = (b_g - b_gn).to(tl.float32)
 
-    b_gq = tl.where(m_c[:, None], exp2(b_gm), 0.)
-    b_gk = tl.where(m_c[:, None], exp2(-b_gm), 0.)
+    b_gq = tl.where(m_c[:, None], tl.math.exp2(b_gm), 0.)
+    b_gk = tl.where(m_c[:, None], tl.math.exp2(-b_gm), 0.)
 
     b_kgt = tl.trans(b_k * b_gk)
 
@@ -761,7 +761,7 @@ def chunk_kda_fwd_intra(
     # Akk must be zero-initialized - kernel only writes lower triangular
     Akk = torch.zeros(B, T, H, BT, device=k.device, dtype=k.dtype)
     # Separate fp32 buffer for diagonal 16x16 blocks (for precision in solve_tril)
-    Akkd = torch.empty(B, T, H, BC, device=k.device, dtype=torch.float32)
+    Akkd = torch.zeros(B, T, H, BC, device=k.device, dtype=torch.float32)
 
     # Step 1: Run token_parallel first to compute diagonal blocks into Akkd (fp32)
     # Step 1: compute diagonal blocks into Akk_diag (fp32)
@@ -785,6 +785,7 @@ def chunk_kda_fwd_intra(
             BC=BC,
             BK=BK,
             USE_GATHER=IS_GATHER_SUPPORTED,
+            num_warps=1
         )
     else:
         Aqk, Akkd = chunk_kda_fwd_intra_token_parallel(
@@ -799,8 +800,10 @@ def chunk_kda_fwd_intra(
             chunk_size=BT,
             sub_chunk_size=BC,
         )
+        print(f"akq, max: {Aqk.max().item()}, min: {Aqk.min().item()}, akk: max: {Akkd.max().item()}, min: {Akkd.min().item()}, ")
 
     # Step 2: Fused inter + solve_tril (works for both fixed-len and varlen)
+    BK = min(64, triton.next_power_of_2(K))
     grid = (NT, B * H)
     chunk_kda_fwd_kernel_inter_solve_fused[grid](
         q=q,
@@ -818,7 +821,9 @@ def chunk_kda_fwd_intra(
         K=K,
         BT=BT,
         BC=BC,
+        BK=BK,
         USE_SAFE_GATE=safe_gate,
+        num_warps=1
     )
     w, u, qg, kg = recompute_w_u_fwd(
         k=k,
@@ -891,6 +896,7 @@ def chunk_kda_bwd_intra(
         NC=NC,
         SAFE_GATE=safe_gate,
         USE_GATHER=IS_GATHER_SUPPORTED,
+        num_warps=1
     )
     dq = dq2
     dk = dk2

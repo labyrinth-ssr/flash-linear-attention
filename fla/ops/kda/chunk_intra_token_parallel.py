@@ -5,22 +5,23 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils.op import exp2
 from fla.utils import autotune_cache_kwargs
 
 
 @triton.heuristics({
     'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
 })
-@triton.autotune(
-    configs=[
-        triton.Config({'BH': BH}, num_warps=num_warps)
-        for BH in [1, 2, 4, 8]
-        for num_warps in [1, 2, 4, 8]
-    ],
-    key=["K", "H"],
-    **autotune_cache_kwargs,
-)
+
+# @triton.autotune(
+#     configs=[
+#         triton.Config({'BH': BH}, num_warps=num_warps)
+#         for BH in [1, 2, 4, 8]
+#         for num_warps in [1, 2, 4, 8]
+#     ],
+#     key=["K", "H"],
+#     **autotune_cache_kwargs,
+# )
+
 @triton.jit(do_not_specialize=['T', 'N'])
 def chunk_kda_fwd_kernel_intra_token_parallel(
     q,
@@ -96,22 +97,29 @@ def chunk_kda_fwd_kernel_intra_token_parallel(
     b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
     b_k = b_k * tl.load(p_beta, boundary_check=(0,)).to(tl.float32)[:, None]
 
-    for j in range(i_ts, min(i_t + 1, min(T, i_ts + BC))):
-        p_kj = tl.make_block_ptr(k + j * H*K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-        p_gj = tl.make_block_ptr(g + j * H*K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
+    # Loop over the sub-chunk size (BC)
+    # Since range() requires static bounds in JIT for unrolling, we iterate 0..BC and mask
+    for delta in range(BC):
+        j = i_ts + delta
+        mask_j = (j <= i_t) & (j < T)
+        # Ensure we read from valid memory even if j >= T (masked out later)
+        safe_j = tl.minimum(j, T - 1)
+
+        p_kj = tl.make_block_ptr(k + safe_j * H*K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
+        p_gj = tl.make_block_ptr(g + safe_j * H*K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
         # [BH, BK]
         b_kj = tl.load(p_kj, boundary_check=(0, 1)).to(tl.float32)
         b_gj = tl.load(p_gj, boundary_check=(0, 1)).to(tl.float32)
 
-        b_kgj = b_kj * exp2(b_g - b_gj)
+        b_kgj = b_kj * tl.math.exp2(b_g - b_gj)
 
-        b_kgj = tl.where(m_k[None, :], b_kgj, 0.0)
+        b_kgj = tl.where(m_k[None, :] & mask_j, b_kgj, 0.0)
         # [BH]
         b_Aqk = tl.sum(b_q * b_kgj, axis=1) * scale
         b_Akk = tl.sum(b_k * b_kgj, axis=1) * tl.where(j < i_t, 1.0, 0.0)
 
-        tl.store(Aqk + i_t * H*BT + (i_hg * BH + o_h) * BT + j % BT, b_Aqk.to(Aqk.dtype.element_ty), mask=m_h)
-        tl.store(Akk + i_t * H*BC + (i_hg * BH + o_h) * BC + j - i_ts, b_Akk.to(Akk.dtype.element_ty), mask=m_h)
+        tl.store(Aqk + i_t * H*BT + (i_hg * BH + o_h) * BT + j % BT, b_Aqk.to(Aqk.dtype.element_ty), mask=m_h & mask_j)
+        tl.store(Akk + i_t * H*BC + (i_hg * BH + o_h) * BC + j - i_ts, b_Akk.to(Akk.dtype.element_ty), mask=m_h & mask_j)
 
 
 def chunk_kda_fwd_intra_token_parallel(
@@ -148,8 +156,12 @@ def chunk_kda_fwd_intra_token_parallel(
     N = len(cu_seqlens) - 1 if cu_seqlens is not None else B
     BT = chunk_size
     BC = sub_chunk_size
+    # def grid(meta): return (B * T, triton.cdiv(H, meta['BH']))
+    # Fixed Block Height for CPU testing to avoid autotune
+    BH = min(H, 1)
 
-    def grid(meta): return (B * T, triton.cdiv(H, meta['BH']))
+    def grid(meta): return (B * T, triton.cdiv(H, BH))
+    
     chunk_kda_fwd_kernel_intra_token_parallel[grid](
         q=q,
         k=k,
@@ -165,5 +177,7 @@ def chunk_kda_fwd_intra_token_parallel(
         K=K,
         BT=BT,
         BC=BC,
+        BH=BH,
+        num_warps=1
     )
     return Aqk, Akk
