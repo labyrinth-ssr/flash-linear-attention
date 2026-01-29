@@ -68,15 +68,26 @@ def recompute_w_u_fwd_kda_kernel(
         p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
         p_u = tl.make_block_ptr(u + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
         b_v = tl.load(p_v, boundary_check=(0, 1))
-        b_vb = (b_v * b_b[:, None]).to(b_v.dtype)
-        b_u = tl.dot(b_A, b_vb, input_precision=DOT_PRECISION)
+        b_vb = b_v.to(tl.float32) * b_b[:, None].to(tl.float32)
+        b_u = tl.dot(b_A.to(tl.float32), b_vb, input_precision=DOT_PRECISION)
+        if i_b == 0 and i_h == 0 and i_v == 0 and i_t == 0:
+            tl.device_print("b_b max:", tl.max(b_b))
+            tl.device_print("b_b min:", tl.min(b_b))
+            tl.device_print("b_v max:", tl.max(b_v))
+            tl.device_print("b_v min:", tl.min(b_v))
+            tl.device_print("A max:", tl.max(b_A))
+            tl.device_print("A min:", tl.min(b_A))
+            tl.device_print("v_b max:", tl.max(b_vb))
+            tl.device_print("v_b min:", tl.min(b_vb))
+            tl.device_print("u_b max:", tl.max(b_u))
+            tl.device_print("u_b min:", tl.min(b_u))
         tl.store(p_u, b_u.to(p_u.dtype.element_ty), boundary_check=(0, 1))
 
     for i_k in range(tl.cdiv(K, BK)):
         p_w = tl.make_block_ptr(w + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
         p_k = tl.make_block_ptr(k + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
         b_k = tl.load(p_k, boundary_check=(0, 1))
-        b_kb = b_k * b_b[:, None]
+        b_kb = b_k.to(tl.float32) * b_b[:, None].to(tl.float32)
 
         p_gk = tl.make_block_ptr(gk + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
         b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(tl.float32)
@@ -96,7 +107,7 @@ def recompute_w_u_fwd_kda_kernel(
             p_kg = tl.make_block_ptr(kg + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
             tl.store(p_kg, b_kg.to(p_kg.dtype.element_ty), boundary_check=(0, 1))
 
-        b_w = tl.dot(b_A, b_kb.to(b_k.dtype))
+        b_w = tl.dot(b_A.to(tl.float32), b_kb)
         tl.store(p_w, b_w.to(p_w.dtype.element_ty), boundary_check=(0, 1))
 
 
@@ -255,6 +266,20 @@ def recompute_w_u_fwd(
         DOT_PRECISION='ieee',
         num_warps=1
     )
+    # print(f"beta shape: {beta.shape}")
+    # print(f"v shape: {v.shape}")
+    # scaled_v = v * beta.unsqueeze(-1)
+    # print(f"scaled_v shape: {scaled_v.shape}")
+    # print(f"v * beta: max: { (scaled_v).max().item()}, min: {(scaled_v).min().item()}")
+    # print("A shape:", A.shape)
+    # # target_w = k * tl.math.exp2(gk) * beta.unsqueeze(-1)
+
+    # # u_ref = A @ scaled_v
+    # # w_ref = A @ target_w
+
+    # # print(f"target_w: max: {target_w.max().item()}, min: {target_w.min().item()}")
+    # print(f"u_ref: max: {u.max().item()}, min: {u.min().item()}")
+    # print(f"w_ref: max: {w_ref.max().item()}, min: {w_ref.min().item()}")
     return w, u, qg, kg
 
 
