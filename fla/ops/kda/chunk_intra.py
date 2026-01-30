@@ -431,7 +431,7 @@ def chunk_kda_bwd_kernel_intra(
         p_gn = g + i_ti * H*K + o_k
         # [BK,]
         b_gn = tl.load(p_gn, mask=m_k, other=0).to(tl.float32)[None, :]
-        for i_j in range(0, i_i):
+        for i_j in range(0, i_i.handle.data.squeeze()):
             p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
             p_gk = tl.make_block_ptr(g, (T, K), (H*K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
             p_dAqk = tl.make_block_ptr(dAqk, (T, BT), (H*BT, 1), (i_ti, i_j * BC), (BC, BC), (1, 0))
@@ -523,7 +523,7 @@ def chunk_kda_bwd_kernel_intra(
         p_gn = g + (min(i_ti + BC, T) - 1) * H*K + o_k
         # [BK,]
         b_gn = tl.load(p_gn, mask=m_k, other=0).to(tl.float32)[None, :]
-        for i_j in range(i_i + 1, NC):
+        for i_j in range(i_i.handle.data.squeeze() + 1, NC.handle.data.squeeze()):
             p_q = tl.make_block_ptr(q, (T, K), (H*K, 1), (i_t*BT+i_j*BC, i_k*BK), (BC, BK), (1, 0))
             p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
             p_gk = tl.make_block_ptr(g, (T, K), (H*K, 1), (i_t * BT + i_j * BC, i_k*BK), (BC, BK), (1, 0))
