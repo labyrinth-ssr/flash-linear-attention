@@ -800,8 +800,6 @@ def chunk_kda_fwd_intra(
             chunk_size=BT,
             sub_chunk_size=BC,
         )
-        print(f"akq, max: {Aqk.max().item()}, min: {Aqk.min().item()}, akk: max: {Akkd.max().item()}, min: {Akkd.min().item()}, ")
-
     # Step 2: Fused inter + solve_tril (works for both fixed-len and varlen)
     BK = min(64, triton.next_power_of_2(K))
     grid = (NT, B * H)
