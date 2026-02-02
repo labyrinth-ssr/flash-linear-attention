@@ -14,7 +14,6 @@ if IS_TF32_SUPPORTED:
     SOLVE_TRIL_DOT_PRECISION = tl.constexpr('tf32')
 else:
     SOLVE_TRIL_DOT_PRECISION = tl.constexpr('ieee')
-
 ################################################################################
 # Fused inter + solve_tril kernel: compute off-diagonal Akk and solve in one pass
 ################################################################################
@@ -440,6 +439,12 @@ def chunk_kda_bwd_kernel_intra(
             b_k = tl.load(p_k, boundary_check=(0, 1))
             b_gk = tl.load(p_gk, boundary_check=(0, 1))
             b_kg = b_k * tl.math.exp2(b_gn - b_gk)
+            # b_gg = tl.math.exp2(b_gn - b_gk)
+            # # DEBUG: Print b_kg for debugging
+            # print("b_gg max:", b_gg.max())
+            # print("b_gg min:", b_gg.min())
+            # print("b_kg max:", b_kg.max())
+            # print("b_kg min:", b_kg.min())
             # [BC, BC]
             b_dAqk = tl.load(p_dAqk, boundary_check=(0, 1))
             b_dAkk = tl.load(p_dAkk, boundary_check=(0, 1))
@@ -497,14 +502,28 @@ def chunk_kda_bwd_kernel_intra(
             m_i = o_i[:, None] >= j
             # [BC, BK]
             b_gqk = tl.math.exp2(b_g - b_gkj[None, :])
+
+            b_gqk_masked = tl.where(m_i, b_gqk, 0.)
+            b_dAkk_masked = tl.where(m_i, b_dAkk[:, None], 0.)
+            # k_state_k = tl.where(m_i, b_kj[None, :] * b_gqk, 0.)
+            print(f"[triton]b_k{j} shape: {(b_kj.shape)}, max: {tl.max(b_kj)}, min:{tl.min(b_kj)}")
+            print(f"[triton]b_gqk{j} shape: {(b_gqk_masked.shape)}, max: {tl.max(b_gqk_masked)}, min:{tl.min(b_gqk_masked)}, total: {b_gqk_masked}")
+            print(f"[triton]b_dAkk{j} shape: {b_dAkk_masked.shape}, max: {tl.max(b_dAkk_masked)}, min:{tl.min(b_dAkk_masked)}")
+            term = tl.where(m_i, b_dAkk[:, None] * b_kj[None, :] * b_gqk, 0.)
             b_dq2 += tl.where(m_i, b_dAqk[:, None] * b_kj[None, :] * b_gqk, 0.)
-            b_dk2 += tl.where(m_i, b_dAkk[:, None] * b_kj[None, :] * b_gqk, 0.)
+            b_dk2 += term
+            print(f"[triton]term{j} shape: {term.shape}, max: {tl.max(term)}, min:{tl.min(term)}, total: {term}")
 
             p_kj += H*K
             p_gkj += H*K
 
     b_db = tl.sum(b_dk2 * b_k, 1)
+
+    print("b_dk2 before scale and beta", b_dk2.max(), b_dk2.min(), b_dk2)
+    print("b_b shape", b_b.shape, "max:", b_b.max(), "min:", b_b.min())
     b_dk2 *= b_b[:, None]
+
+    print("b_dk2 after scale and beta", b_dk2.max(), b_dk2.min())
 
     p_dq = tl.make_block_ptr(dq, (T, K), (H*K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
     p_dq2 = tl.make_block_ptr(dq2, (T, K), (H*K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
@@ -613,8 +632,14 @@ def chunk_kda_bwd_kernel_intra(
     p_dg2 = tl.make_block_ptr(dg2, (T, K), (H*K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
 
     b_dg2 += (b_dk2 - b_dkt) * b_k + tl.load(p_dg, boundary_check=(0, 1))
+    print("[Debug] b_dk2 max:", b_dk2.max())
+    print("[Debug] b_dk2 min:", b_dk2.min())
+    print("[Debug] b_dkt max:", b_dkt.max())
+    print("[Debug] b_dkt min:", b_dkt.min())
     b_dk2 += tl.load(p_dk, boundary_check=(0, 1))
     b_dk2 += b_dkt
+
+
 
     tl.store(p_dk2, b_dk2.to(p_dk2.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_dg2, b_dg2.to(p_dg2.dtype.element_ty), boundary_check=(0, 1))
@@ -854,8 +879,8 @@ def chunk_kda_bwd_intra(
 ):
     B, T, H, K = k.shape
     BT = chunk_size
-    BC = min(16, BT)
-    BK = min(32, triton.next_power_of_2(K))
+    BC = min(64, BT)
+    BK = min(64, triton.next_power_of_2(K))
 
     if chunk_indices is None and cu_seqlens is not None:
         chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
@@ -868,6 +893,45 @@ def chunk_kda_bwd_intra(
     db2 = beta.new_empty(NK, *beta.shape, dtype=torch.float)
     dg2 = torch.empty_like(dg, dtype=torch.float)
     grid = (NK * NC, NT, B * H)
+
+    # === DEBUG: Python Simulation Start ===
+    try:
+        print("--- DEBUG: Python Simulation Start ---")
+        BT = chunk_size
+        nt = T // BT
+        
+        # Reshape for block-wise masking: (B, NT, BT, H, BT) -> (B, H, NT, BT, BT) layout
+        # dAqk is (B, T, H, BT)
+        dAqk_reshaped = dAqk.view(B, nt, BT, H, BT).permute(0, 3, 1, 2, 4) # (B, H, NT, BT, BT)
+        dAkk_reshaped = dAkk.view(B, nt, BT, H, BT).permute(0, 3, 1, 2, 4)
+        beta_reshaped = beta.view(B, nt, BT, H).permute(0, 3, 1, 2) # (B, H, NT, BT)
+        
+        # Masks
+        idx = torch.arange(BT, device=dAqk.device)
+        mask_aqk = (idx[:, None] >= idx[None, :]) # Lower + Diag
+        mask_akk = (idx[:, None] > idx[None, :])  # Strict Lower
+        
+        # Broadcast masks: (1, 1, 1, BT, BT)
+        mask_aqk_bc = mask_aqk.view(1, 1, 1, BT, BT)
+        mask_akk_bc = mask_akk.view(1, 1, 1, BT, BT)
+        
+        # Apply Masks
+        dAqk_masked_sim = torch.where(mask_aqk_bc, dAqk_reshaped, torch.tensor(0., device=dAqk.device))
+        # Note: chunk_kda_bwd_intra doesn't take 'scale', assuming scale=1.0 for now.
+        
+        dAkk_masked_sim = torch.where(mask_akk_bc, dAkk_reshaped, torch.tensor(0., device=dAkk.device))
+        
+        # Apply Beta to dAkk: dAkk_raw = dAkk_masked * beta
+        # beta shape (B, H, NT, BT) -> (B, H, NT, BT, 1)
+        dAkk_raw_sim = dAkk_masked_sim * beta_reshaped.unsqueeze(-1)
+        
+        print(f"DEBUG: Sim dAqk_masked max: {dAqk_masked_sim.max().item()}, min: {dAqk_masked_sim.min().item()}")
+        print(f"DEBUG: Sim dAkk_raw (with beta) max: {dAkk_raw_sim.max().item()}, min: {dAkk_raw_sim.min().item()}")
+        print("--- DEBUG: Python Simulation End ---")
+        
+    except Exception as e:
+        print(f"DEBUG: Simulation failed: {e}")
+    # ======================================
     chunk_kda_bwd_kernel_intra[grid](
         q=q,
         k=k,

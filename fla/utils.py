@@ -406,7 +406,7 @@ USE_CUDA_GRAPH = (IS_NVIDIA and os.environ.get('FLA_USE_CUDA_GRAPH', '0') == '1'
 
 # Nvidia Ampere or newer, haven't check AMD and intel yet.
 IS_TF32_SUPPORTED = (IS_NVIDIA and torch.cuda.get_device_capability(0)[0] >= 8)
-IS_GATHER_SUPPORTED = hasattr(triton.language, 'gather')
+IS_GATHER_SUPPORTED = hasattr(triton.language, 'gather') and os.environ.get('TRITON_INTERPRET', '0') != '1'
 IS_TMA_SUPPORTED = (IS_NVIDIA and torch.cuda.get_device_capability(0)[0] >= 9) \
     and os.environ.get('FLA_USE_TMA', '0') == '1' and \
     (hasattr(triton.language, '_experimental_make_tensor_descriptor') or hasattr(triton.language, 'make_tensor_descriptor'))
