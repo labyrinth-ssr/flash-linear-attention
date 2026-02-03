@@ -622,10 +622,6 @@ def chunk_kda_bwd_kernel_intra(
     p_dg2 = tl.make_block_ptr(dg2, (T, K), (H*K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
 
     b_dg2 += (b_dk2 - b_dkt) * b_k + tl.load(p_dg, boundary_check=(0, 1))
-    print("[Debug] b_dk2 max:", b_dk2.max())
-    print("[Debug] b_dk2 min:", b_dk2.min())
-    print("[Debug] b_dkt max:", b_dkt.max())
-    print("[Debug] b_dkt min:", b_dkt.min())
     b_dk2 += tl.load(p_dk, boundary_check=(0, 1))
     b_dk2 += b_dkt
 
