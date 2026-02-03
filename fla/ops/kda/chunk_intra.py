@@ -503,27 +503,17 @@ def chunk_kda_bwd_kernel_intra(
             # [BC, BK]
             b_gqk = tl.math.exp2(b_g - b_gkj[None, :])
 
-            b_gqk_masked = tl.where(m_i, b_gqk, 0.)
-            b_dAkk_masked = tl.where(m_i, b_dAkk[:, None], 0.)
-            # k_state_k = tl.where(m_i, b_kj[None, :] * b_gqk, 0.)
-            print(f"[triton]b_k{j} shape: {(b_kj.shape)}, max: {tl.max(b_kj)}, min:{tl.min(b_kj)}")
-            print(f"[triton]b_gqk{j} shape: {(b_gqk_masked.shape)}, max: {tl.max(b_gqk_masked)}, min:{tl.min(b_gqk_masked)}, total: {b_gqk_masked}")
-            print(f"[triton]b_dAkk{j} shape: {b_dAkk_masked.shape}, max: {tl.max(b_dAkk_masked)}, min:{tl.min(b_dAkk_masked)}")
             term = tl.where(m_i, b_dAkk[:, None] * b_kj[None, :] * b_gqk, 0.)
             b_dq2 += tl.where(m_i, b_dAqk[:, None] * b_kj[None, :] * b_gqk, 0.)
             b_dk2 += term
-            print(f"[triton]term{j} shape: {term.shape}, max: {tl.max(term)}, min:{tl.min(term)}, total: {term}")
 
             p_kj += H*K
             p_gkj += H*K
 
     b_db = tl.sum(b_dk2 * b_k, 1)
 
-    print("b_dk2 before scale and beta", b_dk2.max(), b_dk2.min(), b_dk2)
-    print("b_b shape", b_b.shape, "max:", b_b.max(), "min:", b_b.min())
     b_dk2 *= b_b[:, None]
 
-    print("b_dk2 after scale and beta", b_dk2.max(), b_dk2.min())
 
     p_dq = tl.make_block_ptr(dq, (T, K), (H*K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
     p_dq2 = tl.make_block_ptr(dq2, (T, K), (H*K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
@@ -879,8 +869,8 @@ def chunk_kda_bwd_intra(
 ):
     B, T, H, K = k.shape
     BT = chunk_size
-    BC = min(64, BT)
-    BK = min(64, triton.next_power_of_2(K))
+    BC = min(32, BT)
+    BK = min(16, triton.next_power_of_2(K))
 
     if chunk_indices is None and cu_seqlens is not None:
         chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
