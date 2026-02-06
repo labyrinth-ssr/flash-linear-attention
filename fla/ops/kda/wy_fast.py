@@ -70,17 +70,6 @@ def recompute_w_u_fwd_kda_kernel(
         b_v = tl.load(p_v, boundary_check=(0, 1))
         b_vb = b_v.to(tl.float32) * b_b[:, None].to(tl.float32)
         b_u = tl.dot(b_A.to(tl.float32), b_vb, input_precision=DOT_PRECISION)
-        if i_b == 0 and i_h == 0 and i_v == 0 and i_t == 0:
-            tl.device_print("b_b max:", tl.max(b_b))
-            tl.device_print("b_b min:", tl.min(b_b))
-            tl.device_print("b_v max:", tl.max(b_v))
-            tl.device_print("b_v min:", tl.min(b_v))
-            tl.device_print("A max:", tl.max(b_A))
-            tl.device_print("A min:", tl.min(b_A))
-            tl.device_print("v_b max:", tl.max(b_vb))
-            tl.device_print("v_b min:", tl.min(b_vb))
-            tl.device_print("u_b max:", tl.max(b_u))
-            tl.device_print("u_b min:", tl.min(b_u))
         tl.store(p_u, b_u.to(p_u.dtype.element_ty), boundary_check=(0, 1))
 
     for i_k in range(tl.cdiv(K, BK)):
